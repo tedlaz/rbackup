@@ -204,6 +204,8 @@ export component AppWindow inherits Window {
     in property <bool> running;
     in property <string> status: "Ready";
     in property <string> version;
+    in property <float> progress; // 0..1, -1 while counting
+    in property <string> progress-text;
     in-out property <int> selected-source: -1;
     in-out property <int> selected-dest: -1;
     property <bool> show-about;
@@ -398,9 +400,20 @@ export component AppWindow inherits Window {
             drop-shadow-blur: ready ? 18px : 0px;
             drop-shadow-color: #2fbf7166;
             animate background, drop-shadow-blur { duration: 250ms; }
+            clip: true;
+
+            // While running the button becomes a progress bar (progress < 0 = still counting: fill pulses).
+            if root.running: Rectangle {
+                x: 0;
+                width: root.progress < 0 ? parent.width : parent.width * root.progress;
+                height: parent.height;
+                background: #2fbf71;
+                opacity: root.progress < 0 ? 0.25 + 0.2 * Math.sin((animation-tick() / 1ms) * 0.3deg) : 1;
+                animate width { duration: 250ms; easing: ease-out; }
+            }
             Text {
-                text: root.running ? "Backing up…" : !root.any-connected ? "No destination connected" : root.sources.length == 0 ? "Add a source folder" : "Back up now";
-                color: parent.ready ? #0b2416 : #6b7190;
+                text: root.running ? root.progress-text : !root.any-connected ? "No destination connected" : root.sources.length == 0 ? "Add a source folder" : "Back up now";
+                color: parent.ready ? #0b2416 : root.running ? #f3f5fb : #6b7190;
                 font-size: 16px;
                 font-weight: 700;
             }

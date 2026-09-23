@@ -8,7 +8,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     rc::Rc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 fn config_path() -> PathBuf {
@@ -76,10 +76,11 @@ fn check(ui: &AppWindow) {
     let weak = ui.as_weak();
     std::thread::spawn(move || {
         for dest in dests {
-            let mut pending = 0;
+            let mut pending = Tally::default();
             for src in &sources {
-                sync_dir(src, &mirror_path(&dest, src), true, &mut pending, &mut Vec::new());
+                sync_dir(src, &mirror_path(&dest, src), true, &mut pending, &mut Vec::new(), &mut |_, _, _| {});
             }
+            let pending = pending.files;
             let path: SharedString = dest.display().to_string().into();
             let _ = weak.upgrade_in_event_loop(move |ui| {
                 let dests = ui.get_dests();
@@ -107,9 +108,23 @@ fn unchanged(src: &Path, dst: &Path) -> bool {
     a.len() == b.len() && diff <= Duration::from_secs(2)
 }
 
+#[derive(Default, Debug, PartialEq)]
+struct Tally {
+    files: u64,
+    bytes: u64,
+}
+
 /// Recursively copies `src` into `dst`, skipping unchanged files.
-/// With `dry`, nothing is written: `count` gets the number of files that would be copied.
-fn sync_dir(src: &Path, dst: &Path, dry: bool, count: &mut u64, errors: &mut Vec<String>) {
+/// With `dry`, nothing is written: `tally` gets the files/bytes that would be copied.
+/// `progress(file, bytes_written, file_done)` fires per 1 MB chunk and once per finished file.
+fn sync_dir(
+    src: &Path,
+    dst: &Path,
+    dry: bool,
+    tally: &mut Tally,
+    errors: &mut Vec<String>,
+    progress: &mut dyn FnMut(&Path, u64, bool),
+) {
     if !dry && let Err(e) = fs::create_dir_all(dst) {
         errors.push(format!("{}: {e}", dst.display()));
         return;
@@ -122,29 +137,68 @@ fn sync_dir(src: &Path, dst: &Path, dry: bool, count: &mut u64, errors: &mut Vec
         let (from, to) = (entry.path(), dst.join(entry.file_name()));
         let Ok(ft) = entry.file_type() else { continue };
         if ft.is_dir() {
-            sync_dir(&from, &to, dry, count, errors);
+            sync_dir(&from, &to, dry, tally, errors, progress);
         } else if ft.is_file() && !unchanged(&from, &to) {
             if dry {
-                *count += 1;
+                tally.files += 1;
+                // On Windows the size comes from the directory listing: no extra disk access.
+                tally.bytes += entry.metadata().map(|m| m.len()).unwrap_or(0);
                 continue;
             }
-            match copy_file(&from, &to) {
-                Ok(()) => *count += 1,
+            match copy_file(&from, &to, &mut |n| progress(&from, n, false)) {
+                Ok(n) => {
+                    tally.files += 1;
+                    tally.bytes += n;
+                }
                 Err(e) => errors.push(format!("{}: {e}", from.display())),
             }
+            progress(&from, 0, true);
         }
     }
 }
 
-/// fs::copy doesn't keep mtime on every OS; set it so `unchanged` works next run.
-/// Read-only files: unlock the copy to overwrite it / set its mtime, then restore permissions.
-fn copy_file(from: &Path, to: &Path) -> std::io::Result<()> {
-    let _ = make_writable(to); // may not exist yet
-    fs::copy(from, to)?;
-    let meta = fs::metadata(from)?;
-    make_writable(to)?;
-    fs::File::options().write(true).open(to)?.set_modified(meta.modified()?)?;
-    fs::set_permissions(to, meta.permissions())
+/// Chunked copy so progress moves inside big files. Returns bytes copied.
+/// Restores mtime (so `unchanged` works next run) and permissions (read-only stays read-only).
+fn copy_file(from: &Path, to: &Path, on_chunk: &mut dyn FnMut(u64)) -> std::io::Result<u64> {
+    use std::io::{Read, Write};
+    // Remove the old copy first: Windows refuses to overwrite read-only or hidden files in place.
+    let _ = make_writable(to);
+    let _ = fs::remove_file(to); // may not exist yet
+    let (mut src, mut dst) = (fs::File::open(from)?, fs::File::create(to)?);
+    let mut buf = vec![0; 1 << 20];
+    let mut total = 0;
+    loop {
+        let n = src.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        dst.write_all(&buf[..n])?;
+        total += n as u64;
+        on_chunk(n as u64);
+    }
+    let meta = src.metadata()?;
+    dst.set_modified(meta.modified()?)?;
+    drop(dst);
+    fs::set_permissions(to, meta.permissions())?;
+    Ok(total)
+}
+
+fn fmt_bytes(b: u64) -> String {
+    let units = ["B", "KB", "MB", "GB", "TB"];
+    let (mut v, mut i) = (b as f64, 0);
+    while v >= 1024.0 && i < units.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 { format!("{b} B") } else { format!("{v:.1} {}", units[i]) }
+}
+
+fn fmt_eta(secs: u64) -> String {
+    match secs {
+        0..60 => format!("{secs} s left"),
+        60..3600 => format!("{} min left", secs.div_ceil(60)),
+        _ => format!("{}h {}m left", secs / 3600, secs % 3600 / 60),
+    }
 }
 
 #[allow(clippy::permissions_set_readonly_false)] // source permissions are restored right after
@@ -185,19 +239,75 @@ fn run_backup(ui: &AppWindow) {
     let sources = source_paths(ui);
     let dests: Vec<PathBuf> = ui.get_dests().iter().filter(|d| d.connected).map(|d| PathBuf::from(d.path.as_str())).collect();
     ui.set_running(true);
+    ui.set_progress(-1.0);
+    ui.set_progress_text("Counting files…".into());
     let weak = ui.as_weak();
     std::thread::spawn(move || {
-        let (mut copied, mut errors) = (0, Vec::new());
+        // Phase 1: count files and bytes to copy so the bar has a total.
+        let mut total = Tally::default();
         for dest in &dests {
             for src in &sources {
-                let msg = format!("Backing up {} → {}…", src.display(), dest.display());
-                let _ = weak.upgrade_in_event_loop(move |ui| ui.set_status(msg.into()));
-                sync_dir(src, &mirror_path(dest, src), false, &mut copied, &mut errors);
+                sync_dir(src, &mirror_path(dest, src), true, &mut total, &mut Vec::new(), &mut |_, _, _| {});
             }
         }
+
+        // Phase 2: copy, reporting progress at most every 50 ms so tiny files don't flood the UI.
+        let (mut copied, mut errors, mut done) = (Tally::default(), Vec::new(), Tally::default());
+        let started = Instant::now();
+        let mut last = started - Duration::from_secs(1);
+        for dest in &dests {
+            for src in &sources {
+                sync_dir(src, &mirror_path(dest, src), false, &mut copied, &mut errors, &mut |file, n, file_done| {
+                    done.bytes += n;
+                    done.files += file_done as u64;
+                    if last.elapsed() < Duration::from_millis(50) {
+                        return;
+                    }
+                    last = Instant::now();
+                    // Only empty files to copy: fall back to counting files.
+                    let frac = if total.bytes > 0 {
+                        done.bytes as f32 / total.bytes as f32
+                    } else {
+                        done.files as f32 / total.files.max(1) as f32
+                    }
+                    .min(1.0);
+                    let text = format!(
+                        "{} / {} · {}%",
+                        fmt_bytes(done.bytes),
+                        fmt_bytes(total.bytes),
+                        (frac * 100.0) as u32
+                    );
+                    let secs = started.elapsed().as_secs_f64();
+                    let speed = done.bytes as f64 / secs.max(0.001);
+                    let mut status = format!(
+                        "{} ({}/{})",
+                        file.file_name().unwrap_or_default().to_string_lossy(),
+                        done.files + 1,
+                        total.files
+                    );
+                    if secs >= 1.0 && speed > 0.0 {
+                        let eta = (total.bytes.saturating_sub(done.bytes) as f64 / speed) as u64;
+                        status += &format!(" · {}/s · {}", fmt_bytes(speed as u64), fmt_eta(eta));
+                    }
+                    status += &format!(" → {}", dest.display());
+                    let _ = weak.upgrade_in_event_loop(move |ui| {
+                        ui.set_progress(frac);
+                        ui.set_progress_text(text.into());
+                        ui.set_status(status.into());
+                    });
+                });
+            }
+        }
+
         let msg = match errors.first() {
-            None => format!("Done — {copied} file(s) copied to {} destination(s)", dests.len()),
-            Some(e) => format!("Done — {copied} copied, {} error(s). First: {e}", errors.len()),
+            None if total.files == 0 => "Done — everything was already backed up".to_string(),
+            None => format!(
+                "Done — {} file(s), {} copied to {} destination(s)",
+                copied.files,
+                fmt_bytes(copied.bytes),
+                dests.len()
+            ),
+            Some(e) => format!("Done — {} copied, {} error(s). First: {e}", copied.files, errors.len()),
         };
         let _ = weak.upgrade_in_event_loop(move |ui| {
             ui.set_running(false);
@@ -341,6 +451,16 @@ mod tests {
     }
 
     #[test]
+    fn formatting() {
+        assert_eq!(fmt_bytes(512), "512 B");
+        assert_eq!(fmt_bytes(1536), "1.5 KB");
+        assert_eq!(fmt_bytes(3 * 1024 * 1024 * 1024), "3.0 GB");
+        assert_eq!(fmt_eta(20), "20 s left");
+        assert_eq!(fmt_eta(61), "2 min left");
+        assert_eq!(fmt_eta(3900), "1h 5m left");
+    }
+
+    #[test]
     fn incremental_copy() {
         let root = std::env::temp_dir().join(format!("rbackup-test-{}", std::process::id()));
         let (src, dst) = (root.join("src"), root.join("dst"));
@@ -352,35 +472,47 @@ mod tests {
         perm.set_readonly(true);
         fs::set_permissions(src.join("ro.txt"), perm.clone()).unwrap();
 
-        let (mut pending, mut errors) = (0, Vec::new());
-        sync_dir(&src, &dst, true, &mut pending, &mut errors);
-        assert_eq!(pending, 3, "dry run counts missing files");
+        let noop = &mut |_: &Path, _, _| {};
+        let tally = |files, bytes| Tally { files, bytes };
+        let mut errors = Vec::new();
+
+        let mut pending = Tally::default();
+        sync_dir(&src, &dst, true, &mut pending, &mut errors, noop);
+        assert_eq!(pending, tally(3, 4), "dry run counts missing files and bytes");
         assert!(!dst.exists(), "dry run writes nothing");
 
-        let mut copied = 0;
-        sync_dir(&src, &dst, false, &mut copied, &mut errors);
-        assert_eq!((copied, errors.clone()), (3, vec![]));
+        let (mut copied, mut seen) = (Tally::default(), Tally::default());
+        sync_dir(&src, &dst, false, &mut copied, &mut errors, &mut |_, n, done| {
+            seen.bytes += n;
+            seen.files += done as u64;
+        });
+        assert_eq!((copied, errors.clone()), (tally(3, 4), vec![]));
+        assert_eq!(seen, tally(3, 4), "progress reports every byte and every finished file");
         assert_eq!(fs::read_to_string(dst.join("sub/b.txt")).unwrap(), "b");
 
-        pending = 0;
-        sync_dir(&src, &dst, true, &mut pending, &mut errors);
-        assert_eq!(pending, 0, "nothing pending after backup");
+        pending = Tally::default();
+        sync_dir(&src, &dst, true, &mut pending, &mut errors, noop);
+        assert_eq!(pending, tally(0, 0), "nothing pending after backup");
 
-        copied = 0;
-        sync_dir(&src, &dst, false, &mut copied, &mut errors);
-        assert_eq!(copied, 0, "second run must skip unchanged files");
+        copied = Tally::default();
+        sync_dir(&src, &dst, false, &mut copied, &mut errors, noop);
+        assert_eq!(copied, tally(0, 0), "second run must skip unchanged files");
 
         fs::write(src.join("a.txt"), "changed").unwrap();
+        // Hidden backup copy: must still be overwritable.
+        #[cfg(windows)]
+        std::process::Command::new("attrib").arg("+h").arg(dst.join("a.txt")).status().unwrap();
         // Changing a read-only file: overwriting its read-only copy must work too.
         perm.set_readonly(false);
         fs::set_permissions(src.join("ro.txt"), perm.clone()).unwrap();
         fs::write(src.join("ro.txt"), "ro changed").unwrap();
         perm.set_readonly(true);
         fs::set_permissions(src.join("ro.txt"), perm.clone()).unwrap();
-        sync_dir(&src, &dst, true, &mut pending, &mut errors);
-        assert_eq!(pending, 2, "dry run spots changed files");
-        sync_dir(&src, &dst, false, &mut copied, &mut errors);
-        assert_eq!((copied, errors), (2, vec![]));
+        sync_dir(&src, &dst, true, &mut pending, &mut errors, noop);
+        assert_eq!(pending, tally(2, 17), "dry run spots changed files");
+        sync_dir(&src, &dst, false, &mut copied, &mut errors, noop);
+        assert_eq!((copied, errors), (tally(2, 17), vec![]));
+        assert_eq!(fs::read_to_string(dst.join("a.txt")).unwrap(), "changed");
         assert!(fs::metadata(dst.join("ro.txt")).unwrap().permissions().readonly());
 
         for p in [src.join("ro.txt"), dst.join("ro.txt")] {
