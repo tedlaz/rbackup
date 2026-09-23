@@ -381,6 +381,14 @@ fn main() -> Result<(), slint::PlatformError> {
         dests.into_iter().map(|p| Dest { path: p.into(), connected: false, pending: -1 }).collect::<Vec<_>>(),
     ));
     ui.set_version(env!("CARGO_PKG_VERSION").into());
+    let theme_path = config_path().with_file_name("theme.txt");
+    let theme = fs::read_to_string(&theme_path).ok().and_then(|t| t.trim().parse().ok());
+    let themes = ui.global::<Theme>().get_all().row_count() as i32;
+    ui.global::<Theme>().set_index(theme.filter(|i| (0..themes).contains(i)).unwrap_or(0));
+    ui.on_theme_picked(move |i| {
+        let _ = fs::create_dir_all(theme_path.parent().unwrap());
+        let _ = fs::write(&theme_path, i.to_string());
+    });
     ui.set_sources(sources.clone().into());
     ui.set_dests(dests.clone().into());
     refresh_connected(&ui);

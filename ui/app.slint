@@ -1,20 +1,80 @@
 import { ListView } from "std-widgets.slint";
 
+export struct Palette {
+    name: string,
+    bg: color, titlebar: color, card: color, border: color,
+    row-hover: color, row-selected: color, btn: color, btn-disabled: color,
+    text: color, text-strong: color, text-muted: color, text-dim: color,
+    accent: color, accent-text: color, ok: color, warn: color, danger: color,
+    on-ok: color, overlay: color, logo-tile: color,
+}
+
+// Index 0 is the default. Rust saves `index` to theme.txt and restores it on start-up.
+export global Theme {
+    in-out property <int> index;
+    out property <[Palette]> all: [
+        // Dark
+        { name: "Midnight", bg: #11131b, titlebar: #0c0e14, card: #1a1d29, border: #262a3b,
+          row-hover: #1f2332, row-selected: #2a3252, btn: #2d3348, btn-disabled: #23273a,
+          text: #d6dae8, text-strong: #eef0f7, text-muted: #7d84a3, text-dim: #6b7190,
+          accent: #4c6ef5, accent-text: #8ea2ff, ok: #2fbf71, warn: #f5b83d, danger: #e5484d,
+          on-ok: #0b2416, overlay: #05060acc, logo-tile: #e9edf6 },
+        { name: "Nord", bg: #2e3440, titlebar: #272c36, card: #3b4252, border: #474f62,
+          row-hover: #434c5e, row-selected: #4c566a, btn: #4c566a, btn-disabled: #353b49,
+          text: #d8dee9, text-strong: #eceff4, text-muted: #9aa5b8, text-dim: #6f7a8f,
+          accent: #5e81ac, accent-text: #88c0d0, ok: #a3be8c, warn: #ebcb8b, danger: #bf616a,
+          on-ok: #1f2a17, overlay: #1b1f27cc, logo-tile: #eceff4 },
+        { name: "Dracula", bg: #282a36, titlebar: #21222c, card: #303241, border: #3c3f52,
+          row-hover: #373a4b, row-selected: #44475a, btn: #44475a, btn-disabled: #282a36,
+          text: #e6e6ef, text-strong: #f8f8f2, text-muted: #a0a6c8, text-dim: #6c78a8,
+          accent: #9d6ff0, accent-text: #d6b8ff, ok: #50fa7b, warn: #f1fa8c, danger: #ff5555,
+          on-ok: #0f2a17, overlay: #111218cc, logo-tile: #f8f8f2 },
+        { name: "Forest", bg: #141a16, titlebar: #0e130f, card: #1b231e, border: #27332b,
+          row-hover: #212b24, row-selected: #2b3d31, btn: #2c3a31, btn-disabled: #1f2822,
+          text: #d3e0d6, text-strong: #eef5ef, text-muted: #86a08e, text-dim: #5f7566,
+          accent: #2f9e8f, accent-text: #7fd6c8, ok: #5ccf7e, warn: #e8b04a, danger: #e5484d,
+          on-ok: #0b2416, overlay: #050806cc, logo-tile: #e6efe8 },
+        // Light
+        { name: "Paper", bg: #f4f5f8, titlebar: #e6e8ef, card: #ffffff, border: #dfe2ea,
+          row-hover: #eef0f5, row-selected: #dfe6ff, btn: #e4e7ef, btn-disabled: #eef0f4,
+          text: #2b2f3d, text-strong: #151823, text-muted: #6b7185, text-dim: #9aa0b3,
+          accent: #4c6ef5, accent-text: #3b5bdb, ok: #1f9d57, warn: #b86f00, danger: #d93036,
+          on-ok: #ffffff, overlay: #1a1d2966, logo-tile: #ffffff },
+        { name: "Solarized", bg: #fdf6e3, titlebar: #eee8d5, card: #fffbef, border: #e6dfc8,
+          row-hover: #f5eed8, row-selected: #dde9ee, btn: #eee8d5, btn-disabled: #f5f0df,
+          text: #586e75, text-strong: #073642, text-muted: #7c8c8e, text-dim: #a3aca8,
+          accent: #268bd2, accent-text: #1a6fae, ok: #5f8a00, warn: #a67c00, danger: #dc322f,
+          on-ok: #ffffff, overlay: #07364266, logo-tile: #fffbef },
+        { name: "Rose", bg: #fbf4f5, titlebar: #f3e4e7, card: #ffffff, border: #efdade,
+          row-hover: #fbecef, row-selected: #f8d7df, btn: #f1e2e6, btn-disabled: #f6eef0,
+          text: #4a3439, text-strong: #2a1a1e, text-muted: #8f7178, text-dim: #b89ea4,
+          accent: #d6457a, accent-text: #b8325f, ok: #2e9d62, warn: #b86f00, danger: #d93036,
+          on-ok: #ffffff, overlay: #2a1a1e66, logo-tile: #ffffff },
+        { name: "Sky", bg: #f1f7fc, titlebar: #e1eef8, card: #ffffff, border: #d5e5f2,
+          row-hover: #e9f3fb, row-selected: #cfe6fa, btn: #dcebf7, btn-disabled: #e9f1f8,
+          text: #243b53, text-strong: #102a43, text-muted: #627d98, text-dim: #9fb3c8,
+          accent: #0f7ad8, accent-text: #0b62b0, ok: #1f9d57, warn: #b86f00, danger: #d93036,
+          on-ok: #ffffff, overlay: #102a4366, logo-tile: #ffffff },
+    ];
+    out property <Palette> p: all[index];
+}
+
 component Btn inherits Rectangle {
     in property <string> text;
-    in property <color> base: #2d3348;
+    in property <color> base: Theme.p.btn;
+    in property <color> ink: Theme.p.text-strong;
     in property <bool> enabled: true;
     callback clicked;
     height: 34px;
     border-radius: 8px;
-    background: !enabled ? #23273a : ta.pressed ? base.darker(20%) : ta.has-hover ? base.brighter(15%) : base;
+    background: !enabled ? Theme.p.btn-disabled : ta.pressed ? base.darker(20%) : ta.has-hover ? base.brighter(15%) : base;
     animate background { duration: 150ms; }
     HorizontalLayout {
         padding-left: 16px;
         padding-right: 16px;
         Text {
             text: root.text;
-            color: root.enabled ? #eef0f7 : #5d6380;
+            color: root.enabled ? root.ink : Theme.p.text-dim;
             font-size: 13px;
             font-weight: 600;
             vertical-alignment: center;
@@ -29,14 +89,14 @@ component Btn inherits Rectangle {
 }
 
 component Card inherits Rectangle {
-    background: #1a1d29;
+    background: Theme.p.card;
     border-radius: 14px;
     border-width: 1px;
-    border-color: #262a3b;
+    border-color: Theme.p.border;
 }
 
 component Label inherits Text {
-    color: #7d84a3;
+    color: Theme.p.text-muted;
     font-size: 11px;
     font-weight: 700;
     letter-spacing: 1px;
@@ -44,7 +104,7 @@ component Label inherits Text {
 }
 
 component CaptionBtn inherits Rectangle {
-    in property <color> hover-bg: #ffffff14;
+    in property <color> hover-bg: Theme.p.text.with-alpha(0.08);
     out property <bool> hovered: ta.has-hover;
     callback clicked;
     width: 46px;
@@ -61,9 +121,9 @@ component TitleBar inherits Rectangle {
     callback close();
     callback about();
     in property <string> version;
-    property <color> ink: #c9cee0;
+    property <color> ink: Theme.p.text;
     height: 52px;
-    background: #0c0e14;
+    background: Theme.p.titlebar;
 
     TouchArea {
         moved => { if self.pressed { root.drag(); } }
@@ -80,9 +140,10 @@ component TitleBar inherits Rectangle {
                 width: 34px;
                 height: 34px;
                 border-radius: 8px;
-                background: #e9edf6;
+                background: Theme.p.logo-tile;
+                // Pre-shrunk copies (2x the shown size): the software renderer aliases big downscales.
                 Image {
-                    source: @image-url("logo.png");
+                    source: @image-url("logo-56.png");
                     width: root.running ? 26px + Math.sin((animation-tick() / 1ms) * 0.5deg) * 3px : 28px;
                     height: self.width;
                     image-rendering: smooth;
@@ -91,7 +152,7 @@ component TitleBar inherits Rectangle {
         }
         Text {
             text: "rbackup";
-            color: #e3e6f0;
+            color: Theme.p.text-strong;
             font-size: 24px;
             font-weight: 700;
             vertical-alignment: center;
@@ -105,14 +166,14 @@ component TitleBar inherits Rectangle {
                 Rectangle {
                     height: 20px;
                     border-radius: 10px;
-                    background: ver-ta.has-hover ? #4c6ef555 : #4c6ef522;
+                    background: ver-ta.has-hover ? Theme.p.accent.with-alpha(0.33) : Theme.p.accent.with-alpha(0.13);
                     animate background { duration: 150ms; }
                     HorizontalLayout {
                         padding-left: 8px;
                         padding-right: 8px;
                         Text {
                             text: "v" + root.version + "  ⓘ";
-                            color: #8ea2ff;
+                            color: Theme.p.accent-text;
                             font-size: 11px;
                             font-weight: 600;
                             vertical-alignment: center;
@@ -173,10 +234,44 @@ component Row inherits Rectangle {
     callback clicked;
     height: 36px;
     border-radius: 8px;
-    background: selected ? #2a3252 : ta.has-hover ? #1f2332 : transparent;
+    background: selected ? Theme.p.row-selected : ta.has-hover ? Theme.p.row-hover : transparent;
     animate background { duration: 120ms; }
     ta := TouchArea { clicked => { root.clicked(); } }
     @children
+}
+
+// Theme chip: previews a palette's background, accent and text; ringed when active.
+component Swatch inherits Rectangle {
+    in property <int> idx;
+    property <Palette> pal: Theme.all[idx];
+    callback picked(int);
+    height: 30px;
+    horizontal-stretch: 1;
+    border-radius: 8px;
+    background: pal.bg;
+    border-width: Theme.index == idx ? 2px : 1px;
+    border-color: Theme.index == idx ? Theme.p.accent : ta.has-hover ? Theme.p.text-dim : Theme.p.border;
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 6px;
+        spacing: 6px;
+        VerticalLayout {
+            alignment: center;
+            Rectangle { width: 10px; height: 10px; border-radius: 5px; background: pal.accent; }
+        }
+        Text {
+            text: pal.name;
+            color: pal.text-strong;
+            font-size: 11px;
+            font-weight: 600;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { Theme.index = idx; root.picked(idx); }
+    }
 }
 
 export struct Dest {
@@ -193,7 +288,8 @@ export component AppWindow inherits Window {
     preferred-height: 660px;
     min-width: 440px;
     min-height: 520px;
-    background: #11131b;
+    background: Theme.p.bg;
+    animate background { duration: 200ms; }
     default-font-size: 14px;
 
     in property <[string]> sources;
@@ -218,6 +314,7 @@ export component AppWindow inherits Window {
     callback drag();
     callback close-window();
     callback resize(int);
+    callback theme-picked(int);
 
     VerticalLayout {
     TitleBar {
@@ -247,13 +344,13 @@ export component AppWindow inherits Window {
                     }
                     Btn {
                         text: "+ Add";
-                        base: #4c6ef5;
+                        base: Theme.p.accent; ink: white;
                         clicked => { root.add-source(); }
                     }
                 }
                 if root.sources.length == 0: Text {
                     text: "No folders yet — click + Add";
-                    color: #5d6380;
+                    color: Theme.p.text-dim;
                     vertical-stretch: 1;
                     horizontal-alignment: center;
                     vertical-alignment: center;
@@ -266,7 +363,7 @@ export component AppWindow inherits Window {
                             x: 12px;
                             width: parent.width - 24px;
                             text: s;
-                            color: #d6dae8;
+                            color: Theme.p.text;
                             vertical-alignment: center;
                             overflow: elide;
                         }
@@ -290,13 +387,13 @@ export component AppWindow inherits Window {
                     }
                     Btn {
                         text: "+ Add";
-                        base: #4c6ef5;
+                        base: Theme.p.accent; ink: white;
                         clicked => { root.add-dest(); }
                     }
                 }
                 if root.dests.length == 0: Text {
                     text: "Add a folder on your external drive";
-                    color: #5d6380;
+                    color: Theme.p.text-dim;
                     vertical-stretch: 1;
                     horizontal-alignment: center;
                     vertical-alignment: center;
@@ -315,13 +412,13 @@ export component AppWindow inherits Window {
                                     width: 8px;
                                     height: 8px;
                                     border-radius: 4px;
-                                    background: d.connected ? #2fbf71 : #e5484d;
+                                    background: d.connected ? Theme.p.ok : Theme.p.danger;
                                     animate background { duration: 300ms; }
                                 }
                             }
                             Text {
                                 text: d.path;
-                                color: d.connected ? #d6dae8 : #6b7190;
+                                color: d.connected ? Theme.p.text : Theme.p.text-dim;
                                 vertical-alignment: center;
                                 overflow: elide;
                                 horizontal-stretch: 1;
@@ -329,7 +426,7 @@ export component AppWindow inherits Window {
                             VerticalLayout {
                                 alignment: center;
                                 pill := Rectangle {
-                                    property <color> tint: !d.connected ? #6b7190 : d.pending < 0 ? #7d84a3 : d.pending == 0 ? #2fbf71 : #f5b83d;
+                                    property <color> tint: !d.connected ? Theme.p.text-dim : d.pending < 0 ? Theme.p.text-muted : d.pending == 0 ? Theme.p.ok : Theme.p.warn;
                                     height: 22px;
                                     border-radius: 11px;
                                     background: tint.with-alpha(0.14);
@@ -355,7 +452,7 @@ export component AppWindow inherits Window {
 
         // Change banner: slides open once a destination is connected.
         banner := Rectangle {
-            property <color> tint: root.checking ? #7d84a3 : root.pending-total > 0 ? #f5b83d : #2fbf71;
+            property <color> tint: root.checking ? Theme.p.text-muted : root.pending-total > 0 ? Theme.p.warn : Theme.p.ok;
             height: root.any-connected ? 44px : 0px;
             opacity: root.any-connected ? 1 : 0;
             clip: true;
@@ -396,9 +493,9 @@ export component AppWindow inherits Window {
             property <bool> ready: root.any-connected && !root.running && root.sources.length > 0;
             height: 52px;
             border-radius: 12px;
-            background: !ready ? #2a2e40 : go-ta.pressed ? #27a862 : go-ta.has-hover ? #3dd683 : #2fbf71;
+            background: !ready ? Theme.p.btn : go-ta.pressed ? Theme.p.ok.darker(12%) : go-ta.has-hover ? Theme.p.ok.brighter(15%) : Theme.p.ok;
             drop-shadow-blur: ready ? 18px : 0px;
-            drop-shadow-color: #2fbf7166;
+            drop-shadow-color: Theme.p.ok.with-alpha(0.4);
             animate background, drop-shadow-blur { duration: 250ms; }
             clip: true;
 
@@ -407,13 +504,13 @@ export component AppWindow inherits Window {
                 x: 0;
                 width: root.progress < 0 ? parent.width : parent.width * root.progress;
                 height: parent.height;
-                background: #2fbf71;
+                background: Theme.p.ok;
                 opacity: root.progress < 0 ? 0.25 + 0.2 * Math.sin((animation-tick() / 1ms) * 0.3deg) : 1;
                 animate width { duration: 250ms; easing: ease-out; }
             }
             Text {
                 text: root.running ? root.progress-text : !root.any-connected ? "No destination connected" : root.sources.length == 0 ? "Add a source folder" : "Back up now";
-                color: parent.ready ? #0b2416 : root.running ? #f3f5fb : #6b7190;
+                color: parent.ready ? Theme.p.on-ok : root.running ? Theme.p.text-strong : Theme.p.text-dim;
                 font-size: 16px;
                 font-weight: 700;
             }
@@ -426,7 +523,7 @@ export component AppWindow inherits Window {
 
         Text {
             text: root.status;
-            color: #7d84a3;
+            color: Theme.p.text-muted;
             font-size: 12px;
             overflow: elide;
         }
@@ -437,7 +534,7 @@ export component AppWindow inherits Window {
     about := Rectangle {
         y: 52px; // below the title bar so it stays draggable
         height: parent.height - 52px;
-        background: #05060acc;
+        background: Theme.p.overlay;
         opacity: root.show-about ? 1 : 0;
         visible: self.opacity > 0.01;
         animate opacity { duration: 200ms; easing: ease-out; }
@@ -454,7 +551,7 @@ export component AppWindow inherits Window {
 
         Card {
             width: min(parent.width - 48px, 480px);
-            height: min(parent.height - 48px, 560px);
+            height: min(parent.height - 32px, 580px);
             y: (parent.height - self.height) / 2 + (root.show-about ? 0px : 16px);
             animate y { duration: 250ms; easing: ease-out; }
             drop-shadow-blur: 30px;
@@ -463,21 +560,21 @@ export component AppWindow inherits Window {
 
             VerticalLayout {
                 padding: 24px;
-                spacing: 14px;
+                spacing: 10px;
                 HorizontalLayout {
                     spacing: 12px;
                     Rectangle {
                         width: 44px;
                         height: 44px;
                         border-radius: 10px;
-                        background: #e9edf6;
-                        Image { source: @image-url("logo.png"); width: 36px; height: 36px; image-rendering: smooth; }
+                        background: Theme.p.logo-tile;
+                        Image { source: @image-url("logo-72.png"); width: 36px; height: 36px; image-rendering: smooth; }
                     }
                     VerticalLayout {
                         alignment: center;
                         horizontal-stretch: 1;
-                        Text { text: "rbackup"; color: #f3f5fb; font-size: 22px; font-weight: 800; }
-                        Text { text: "Version " + root.version; color: #8ea2ff; font-size: 12px; font-weight: 600; }
+                        Text { text: "rbackup"; color: Theme.p.text-strong; font-size: 22px; font-weight: 800; }
+                        Text { text: "Version " + root.version; color: Theme.p.accent-text; font-size: 12px; font-weight: 600; }
                     }
                     // Close: drawn X (the font has no ✕ glyph).
                     VerticalLayout {
@@ -486,7 +583,7 @@ export component AppWindow inherits Window {
                             width: 34px;
                             height: 34px;
                             border-radius: 8px;
-                            background: x-ta.has-hover ? #e5484d : #2d3348;
+                            background: x-ta.has-hover ? #e5484d : Theme.p.btn;
                             animate background { duration: 150ms; }
                             Path {
                                 width: x-ta.has-hover ? 12px : 10px;
@@ -494,7 +591,7 @@ export component AppWindow inherits Window {
                                 viewbox-width: 10;
                                 viewbox-height: 10;
                                 commands: "M 0 0 L 10 10 M 10 0 L 0 10";
-                                stroke: x-ta.has-hover ? white : #c9cee0;
+                                stroke: x-ta.has-hover ? white : Theme.p.text;
                                 stroke-width: 1.5px;
                                 animate width { duration: 250ms; easing: ease-out-back; }
                             }
@@ -506,12 +603,12 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                Rectangle { height: 1px; background: #262a3b; }
+                Rectangle { height: 1px; background: Theme.p.border; }
 
                 Label { text: "HOW TO USE"; }
                 Text {
                     wrap: word-wrap;
-                    color: #c9cee0;
+                    color: Theme.p.text;
                     font-size: 13px;
                     text: "1.  Source folders — click + Add and choose the folders you want to protect.\n"
                         + "2.  Destinations — click + Add and choose a folder on an external drive. You can add several.\n"
@@ -521,16 +618,28 @@ export component AppWindow inherits Window {
                         + "Files keep their original path inside the backup, e.g. C:\\Users\\ted\\Documents becomes <destination>\\c\\Users\\ted\\Documents. Files deleted from a source are never deleted from the backup.";
                 }
 
-                Rectangle { height: 1px; background: #262a3b; }
+                Rectangle { height: 1px; background: Theme.p.border; }
+
+                Label { text: "THEME"; }
+                HorizontalLayout {
+                    spacing: 6px;
+                    for i in 4: Swatch { idx: i; picked(n) => { root.theme-picked(n); } }
+                }
+                HorizontalLayout {
+                    spacing: 6px;
+                    for i in 4: Swatch { idx: i + 4; picked(n) => { root.theme-picked(n); } }
+                }
+
+                Rectangle { height: 1px; background: Theme.p.border; }
 
                 Label { text: "ABOUT"; }
                 Text {
                     wrap: word-wrap;
-                    color: #c9cee0;
+                    color: Theme.p.text;
                     font-size: 13px;
                     text: "Designed and developed by Ted Lazaros.\nA lightweight, no-nonsense backup tool written in Rust.";
                 }
-                Text { text: "© 2026 Ted Lazaros"; color: #6b7190; font-size: 12px; }
+                Text { text: "© 2026 Ted Lazaros"; color: Theme.p.text-dim; font-size: 12px; }
                 Rectangle { vertical-stretch: 1; }
             }
         }
