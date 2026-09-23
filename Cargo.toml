@@ -1,6 +1,6 @@
 [package]
 name = "rbackup"
-version = "0.1.3"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
@@ -16,7 +16,11 @@ rfd = "0.15"
 
 # Same version/features winit already builds: bring the running instance to the front.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.52", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Dwm",
+  "Win32_UI_WindowsAndMessaging",
+] }
 
 [build-dependencies]
 slint-build = "1"

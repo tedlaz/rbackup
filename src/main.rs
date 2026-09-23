@@ -351,6 +351,24 @@ fn focus_existing() {
 #[cfg(not(windows))]
 fn focus_existing() {}
 
+/// Windows 11 doesn't round frameless windows by itself; ask DWM to. No-op on Windows 10.
+#[cfg(windows)]
+fn round_corners(w: &winit::window::Window) {
+    use windows_sys::Win32::Graphics::Dwm::{DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DwmSetWindowAttribute};
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    if let Ok(h) = w.window_handle()
+        && let RawWindowHandle::Win32(h) = h.as_raw()
+    {
+        let pref = DWMWCP_ROUND;
+        unsafe {
+            DwmSetWindowAttribute(h.hwnd.get(), DWMWA_WINDOW_CORNER_PREFERENCE as u32, &pref as *const _ as _, 4);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn round_corners(_: &winit::window::Window) {}
+
 fn main() -> Result<(), slint::PlatformError> {
     let Ok(_lock) = instance_lock() else {
         focus_existing();
@@ -460,9 +478,24 @@ fn main() -> Result<(), slint::PlatformError> {
     });
 
     // Re-check when the user comes back to the window, e.g. after deleting or editing files in Explorer.
+    // Also centers the window on its monitor and rounds its corners at the first event:
+    // the winit window doesn't exist before that.
     ui.window().on_winit_window_event({
         let weak = ui.as_weak();
-        move |_, event| {
+        let mut centered = false;
+        move |window, event| {
+            if !centered {
+                centered = true;
+                window.with_winit_window(|w| {
+                    round_corners(w);
+                    if let Some(m) = w.current_monitor() {
+                        let (ms, ws, mp) = (m.size(), w.outer_size(), m.position());
+                        let x = mp.x + (ms.width as i32 - ws.width as i32) / 2;
+                        let y = mp.y + (ms.height as i32 - ws.height as i32) / 2;
+                        w.set_outer_position(winit::dpi::PhysicalPosition::new(x.max(mp.x), y.max(mp.y)));
+                    }
+                });
+            }
             if let winit::event::WindowEvent::Focused(true) = event
                 && let Some(ui) = weak.upgrade()
                 && !ui.get_checking()
