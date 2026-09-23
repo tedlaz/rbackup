@@ -317,6 +317,53 @@ fn run_backup(ui: &AppWindow) {
     });
 }
 
+const RELEASES: &str = "https://github.com/tedlaz/rbackup/releases/latest";
+
+/// Set once an update is installed: `main` restarts the app after the event loop ends.
+static RESTART: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Runs curl.exe (built into Windows 10 1803+) without flashing a console window.
+fn curl(args: &[&str]) -> Option<std::process::Output> {
+    let mut cmd = std::process::Command::new("curl.exe");
+    cmd.args(args);
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0800_0000); // CREATE_NO_WINDOW
+    cmd.output().ok().filter(|o| o.status.success())
+}
+
+/// Newest released version, read from the /releases/latest redirect: no GitHub API, no rate limit.
+fn latest_version() -> Option<String> {
+    let out = curl(&["-sI", "--max-time", "10", RELEASES])?;
+    let head = String::from_utf8_lossy(&out.stdout);
+    let loc = head.lines().find(|l| l.to_ascii_lowercase().starts_with("location:"))?;
+    Some(loc.split_once("/tag/v")?.1.trim().to_string())
+}
+
+fn newer(latest: &str, current: &str) -> bool {
+    let parse = |v: &str| v.split('.').map(|n| n.parse().unwrap_or(0)).collect::<Vec<u32>>();
+    parse(latest) > parse(current)
+}
+
+/// Downloads the latest exe next to the running one and swaps it in (Windows lets a running exe be renamed).
+// ponytail: trusts HTTPS from GitHub, no signature check; code-sign the exe if that ever matters.
+fn install_update(exe: &Path) -> Result<(), String> {
+    let (new, old) = (exe.with_file_name("rbackup.new.exe"), exe.with_file_name("rbackup.old.exe"));
+    let url = format!("{RELEASES}/download/rbackup.exe");
+    curl(&["-fsSL", "--max-time", "300", "-o", &new.to_string_lossy(), &url]).ok_or("download failed")?;
+    // Guards against an error page or a cut-off download: the real exe is several MB.
+    if fs::metadata(&new).map(|m| m.len()).unwrap_or(0) < 1 << 20 {
+        let _ = fs::remove_file(&new);
+        return Err("download incomplete".into());
+    }
+    let _ = fs::remove_file(&old);
+    fs::rename(exe, &old).map_err(|e| e.to_string())?;
+    if let Err(e) = fs::rename(&new, exe) {
+        let _ = fs::rename(&old, exe);
+        return Err(e.to_string());
+    }
+    Ok(())
+}
+
 /// Exclusive lock on a file for the app's lifetime; the OS drops it on exit or crash.
 /// Err = another instance holds it. Ok(None) = couldn't create the lock file, run anyway.
 fn instance_lock() -> Result<Option<fs::File>, ()> {
@@ -370,7 +417,7 @@ fn round_corners(w: &winit::window::Window) {
 fn round_corners(_: &winit::window::Window) {}
 
 fn main() -> Result<(), slint::PlatformError> {
-    let Ok(_lock) = instance_lock() else {
+    let Ok(lock) = instance_lock() else {
         focus_existing();
         return Ok(());
     };
@@ -393,6 +440,51 @@ fn main() -> Result<(), slint::PlatformError> {
     ui.set_dests(dests.clone().into());
     refresh_connected(&ui);
     check(&ui);
+
+    // Taken before any update renames the running exe: the restart launches this path.
+    let exe = std::env::current_exe().ok();
+    if let Some(exe) = exe.clone() {
+        let weak = ui.as_weak();
+        std::thread::spawn(move || {
+            if let Some(v) = latest_version().filter(|v| newer(v, env!("CARGO_PKG_VERSION"))) {
+                let _ = weak.upgrade_in_event_loop(move |ui| ui.set_update_version(v.into()));
+            }
+            // Leftover from the last update; the old process may still be exiting, so retry briefly.
+            let old = exe.with_file_name("rbackup.old.exe");
+            for _ in 0..20 {
+                if !old.exists() || fs::remove_file(&old).is_ok() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(500));
+            }
+        });
+    }
+    ui.on_update({
+        let (weak, exe) = (ui.as_weak(), exe.clone());
+        move || {
+            let ui = weak.unwrap();
+            let Some(exe) = exe.clone() else { return };
+            if ui.get_running() || ui.get_updating() {
+                return;
+            }
+            ui.set_updating(true);
+            ui.set_status("Downloading update…".into());
+            let weak = weak.clone();
+            std::thread::spawn(move || {
+                let result = install_update(&exe);
+                let _ = weak.upgrade_in_event_loop(move |ui| match result {
+                    Ok(()) => {
+                        RESTART.store(true, std::sync::atomic::Ordering::Relaxed);
+                        let _ = slint::quit_event_loop();
+                    }
+                    Err(e) => {
+                        ui.set_updating(false);
+                        ui.set_status(format!("Update failed: {e} — download it from {RELEASES}").into());
+                    }
+                });
+            });
+        }
+    });
 
     ui.on_add_source({
         let (weak, sources) = (ui.as_weak(), sources.clone());
@@ -527,7 +619,14 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
 
-    ui.run()
+    ui.run()?;
+    if RESTART.load(std::sync::atomic::Ordering::Relaxed)
+        && let Some(exe) = exe
+    {
+        drop(lock); // or the new instance would just focus this one and quit
+        let _ = std::process::Command::new(exe).spawn();
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -541,6 +640,14 @@ mod tests {
         assert_eq!(mirror_path(d, Path::new(r"C:\Users\ted\Documents")), Path::new(r"F:\b\c\Users\ted\Documents"));
         assert_eq!(mirror_path(d, Path::new(r"E:\")), Path::new(r"F:\b\e"));
         assert_eq!(mirror_path(d, Path::new(r"\\nas\share\x")), Path::new(r"F:\b\nas\share\x"));
+    }
+
+    #[test]
+    fn versions() {
+        assert!(newer("0.2.10", "0.2.9"));
+        assert!(newer("1.0", "0.9.9"));
+        assert!(!newer("0.2.1", "0.2.1"));
+        assert!(!newer("0.1.3", "0.2.1"));
     }
 
     #[test]

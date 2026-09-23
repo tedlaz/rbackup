@@ -121,6 +121,9 @@ component TitleBar inherits Rectangle {
     callback close();
     callback about();
     in property <string> version;
+    in property <string> update-version;
+    in property <bool> updating;
+    callback update();
     property <color> ink: Theme.p.text;
     height: 52px;
     background: Theme.p.titlebar;
@@ -162,6 +165,7 @@ component TitleBar inherits Rectangle {
             horizontal-stretch: 1;
             HorizontalLayout {
                 alignment: start;
+                spacing: 6px;
                 // Version pill: opens the About / help window.
                 Rectangle {
                     height: 20px;
@@ -182,6 +186,29 @@ component TitleBar inherits Rectangle {
                     ver-ta := TouchArea {
                         mouse-cursor: pointer;
                         clicked => { root.about(); }
+                    }
+                }
+                // Update pill: shown when GitHub has a newer release; one click installs and restarts.
+                if root.update-version != "": Rectangle {
+                    height: 20px;
+                    border-radius: 10px;
+                    background: upd-ta.enabled && upd-ta.has-hover ? Theme.p.ok.with-alpha(0.33) : Theme.p.ok.with-alpha(0.15);
+                    animate background { duration: 150ms; }
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        Text {
+                            text: root.updating ? "Updating…" : "Update to v" + root.update-version;
+                            color: Theme.p.ok;
+                            font-size: 11px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                    }
+                    upd-ta := TouchArea {
+                        enabled: !root.updating && !root.running;
+                        mouse-cursor: self.enabled ? pointer : default;
+                        clicked => { root.update(); }
                     }
                 }
             }
@@ -315,11 +342,17 @@ export component AppWindow inherits Window {
     callback close-window();
     callback resize(int);
     callback theme-picked(int);
+    in property <string> update-version; // newer release on GitHub, "" = none
+    in property <bool> updating;
+    callback update();
 
     VerticalLayout {
     TitleBar {
         running: root.running;
         version: root.version;
+        update-version: root.update-version;
+        updating: root.updating;
+        update => { root.update(); }
         about => { root.show-about = true; about-focus.focus(); }
         drag => { root.drag(); }
         minimize => { root.minimized = true; }
