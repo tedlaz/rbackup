@@ -1,0 +1,33 @@
+# Push a tag like v0.1.0 -> build rbackup.exe on Windows and attach it to a GitHub release.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the release and upload the asset
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          asset="rbackup-${GITHUB_REF_NAME}-windows-x64.exe"
+          cp target/release/rbackup.exe "$asset"
+          gh release create "$GITHUB_REF_NAME" "$asset" --title "rbackup $GITHUB_REF_NAME" --generate-notes

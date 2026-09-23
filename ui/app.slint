@@ -1,0 +1,538 @@
+import { ListView } from "std-widgets.slint";
+
+component Btn inherits Rectangle {
+    in property <string> text;
+    in property <color> base: #2d3348;
+    in property <bool> enabled: true;
+    callback clicked;
+    height: 34px;
+    border-radius: 8px;
+    background: !enabled ? #23273a : ta.pressed ? base.darker(20%) : ta.has-hover ? base.brighter(15%) : base;
+    animate background { duration: 150ms; }
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        Text {
+            text: root.text;
+            color: root.enabled ? #eef0f7 : #5d6380;
+            font-size: 13px;
+            font-weight: 600;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component Card inherits Rectangle {
+    background: #1a1d29;
+    border-radius: 14px;
+    border-width: 1px;
+    border-color: #262a3b;
+}
+
+component Label inherits Text {
+    color: #7d84a3;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    vertical-alignment: center;
+}
+
+component CaptionBtn inherits Rectangle {
+    in property <color> hover-bg: #ffffff14;
+    out property <bool> hovered: ta.has-hover;
+    callback clicked;
+    width: 46px;
+    background: ta.pressed ? hover-bg.darker(15%) : ta.has-hover ? hover-bg : transparent;
+    animate background { duration: 150ms; }
+    @children
+    ta := TouchArea { clicked => { root.clicked(); } }
+}
+
+component TitleBar inherits Rectangle {
+    in property <bool> running;
+    callback drag();
+    callback minimize();
+    callback close();
+    callback about();
+    in property <string> version;
+    property <color> ink: #c9cee0;
+    height: 52px;
+    background: #0c0e14;
+
+    TouchArea {
+        moved => { if self.pressed { root.drag(); } }
+    }
+
+    HorizontalLayout {
+        padding-left: 16px;
+        spacing: 12px;
+
+        // Logo on a light tile (its dark database would vanish on the dark bar); pulses while a backup runs.
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 34px;
+                height: 34px;
+                border-radius: 8px;
+                background: #e9edf6;
+                Image {
+                    source: @image-url("logo.png");
+                    width: root.running ? 26px + Math.sin((animation-tick() / 1ms) * 0.5deg) * 3px : 28px;
+                    height: self.width;
+                    image-rendering: smooth;
+                }
+            }
+        }
+        Text {
+            text: "rbackup";
+            color: #e3e6f0;
+            font-size: 24px;
+            font-weight: 700;
+            vertical-alignment: center;
+        }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            HorizontalLayout {
+                alignment: start;
+                // Version pill: opens the About / help window.
+                Rectangle {
+                    height: 20px;
+                    border-radius: 10px;
+                    background: ver-ta.has-hover ? #4c6ef555 : #4c6ef522;
+                    animate background { duration: 150ms; }
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        Text {
+                            text: "v" + root.version + "  ⓘ";
+                            color: #8ea2ff;
+                            font-size: 11px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                    }
+                    ver-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.about(); }
+                    }
+                }
+            }
+        }
+
+        // Minimize: bar drops and shrinks on hover.
+        min := CaptionBtn {
+            clicked => { root.minimize(); }
+            Rectangle {
+                width: min.hovered ? 7px : 10px;
+                height: 1.5px;
+                y: (parent.height - self.height) / 2 + (min.hovered ? 3px : 0px);
+                background: root.ink;
+                animate width, y { duration: 200ms; easing: ease-out-back; }
+            }
+        }
+
+        // Close: X pops bigger and turns white over a red background.
+        // (Drawn as a Path: the software renderer doesn't rotate rectangles.)
+        close := CaptionBtn {
+            hover-bg: #e5484d;
+            clicked => { root.close(); }
+            Path {
+                width: close.hovered ? 12px : 10px;
+                height: self.width;
+                viewbox-width: 10;
+                viewbox-height: 10;
+                commands: "M 0 0 L 10 10 M 10 0 L 0 10";
+                stroke: close.hovered ? white : root.ink;
+                stroke-width: 1.5px;
+                animate width { duration: 250ms; easing: ease-out-back; }
+                animate stroke { duration: 150ms; }
+            }
+        }
+    }
+}
+
+// Invisible edge handle; `dir` maps to winit's ResizeDirection in main.rs.
+component Grip inherits TouchArea {
+    in property <int> dir;
+    callback resize(int);
+    pointer-event(e) => {
+        if e.kind == PointerEventKind.down && e.button == PointerEventButton.left { root.resize(dir); }
+    }
+}
+
+// Selectable list row with hover highlight.
+component Row inherits Rectangle {
+    in property <bool> selected;
+    callback clicked;
+    height: 36px;
+    border-radius: 8px;
+    background: selected ? #2a3252 : ta.has-hover ? #1f2332 : transparent;
+    animate background { duration: 120ms; }
+    ta := TouchArea { clicked => { root.clicked(); } }
+    @children
+}
+
+export struct Dest {
+    path: string,
+    connected: bool,
+    pending: int, // -1 = not checked yet
+}
+
+export component AppWindow inherits Window {
+    no-frame: true;
+    title: "rbackup";
+    icon: @image-url("logo.png");
+    preferred-width: 600px;
+    preferred-height: 660px;
+    min-width: 440px;
+    min-height: 520px;
+    background: #11131b;
+    default-font-size: 14px;
+
+    in property <[string]> sources;
+    in property <[Dest]> dests;
+    in property <bool> any-connected;
+    in property <bool> checking;
+    in property <int> pending-total;
+    in property <bool> running;
+    in property <string> status: "Ready";
+    in property <string> version;
+    in-out property <int> selected-source: -1;
+    in-out property <int> selected-dest: -1;
+    property <bool> show-about;
+
+    callback add-source();
+    callback remove-source(int);
+    callback add-dest();
+    callback remove-dest(int);
+    callback backup();
+    callback drag();
+    callback close-window();
+    callback resize(int);
+
+    VerticalLayout {
+    TitleBar {
+        running: root.running;
+        version: root.version;
+        about => { root.show-about = true; about-focus.focus(); }
+        drag => { root.drag(); }
+        minimize => { root.minimized = true; }
+        close => { root.close-window(); }
+    }
+    VerticalLayout {
+        padding: 24px;
+        spacing: 14px;
+
+        Card {
+            vertical-stretch: 3;
+            VerticalLayout {
+                padding: 16px;
+                spacing: 10px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Label { text: "SOURCE FOLDERS"; horizontal-stretch: 1; }
+                    Btn {
+                        text: "Remove";
+                        enabled: root.selected-source >= 0;
+                        clicked => { root.remove-source(root.selected-source); root.selected-source = -1; }
+                    }
+                    Btn {
+                        text: "+ Add";
+                        base: #4c6ef5;
+                        clicked => { root.add-source(); }
+                    }
+                }
+                if root.sources.length == 0: Text {
+                    text: "No folders yet — click + Add";
+                    color: #5d6380;
+                    vertical-stretch: 1;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                if root.sources.length > 0: ListView {
+                    for s[i] in root.sources: Row {
+                        selected: i == root.selected-source;
+                        clicked => { root.selected-source = i; }
+                        Text {
+                            x: 12px;
+                            width: parent.width - 24px;
+                            text: s;
+                            color: #d6dae8;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                }
+            }
+        }
+
+        Card {
+            vertical-stretch: 2;
+            VerticalLayout {
+                padding: 16px;
+                spacing: 10px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Label { text: "DESTINATIONS"; horizontal-stretch: 1; }
+                    Btn {
+                        text: "Remove";
+                        enabled: root.selected-dest >= 0;
+                        clicked => { root.remove-dest(root.selected-dest); root.selected-dest = -1; }
+                    }
+                    Btn {
+                        text: "+ Add";
+                        base: #4c6ef5;
+                        clicked => { root.add-dest(); }
+                    }
+                }
+                if root.dests.length == 0: Text {
+                    text: "Add a folder on your external drive";
+                    color: #5d6380;
+                    vertical-stretch: 1;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                if root.dests.length > 0: ListView {
+                    for d[i] in root.dests: Row {
+                        selected: i == root.selected-dest;
+                        clicked => { root.selected-dest = i; }
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 8px;
+                            spacing: 10px;
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 8px;
+                                    height: 8px;
+                                    border-radius: 4px;
+                                    background: d.connected ? #2fbf71 : #e5484d;
+                                    animate background { duration: 300ms; }
+                                }
+                            }
+                            Text {
+                                text: d.path;
+                                color: d.connected ? #d6dae8 : #6b7190;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                horizontal-stretch: 1;
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                pill := Rectangle {
+                                    property <color> tint: !d.connected ? #6b7190 : d.pending < 0 ? #7d84a3 : d.pending == 0 ? #2fbf71 : #f5b83d;
+                                    height: 22px;
+                                    border-radius: 11px;
+                                    background: tint.with-alpha(0.14);
+                                    animate background { duration: 300ms; }
+                                    HorizontalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 10px;
+                                        Text {
+                                            text: !d.connected ? "not connected" : d.pending < 0 ? "checking…" : d.pending == 0 ? "up to date" : d.pending + " to back up";
+                                            color: pill.tint;
+                                            font-size: 11px;
+                                            font-weight: 700;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Change banner: slides open once a destination is connected.
+        banner := Rectangle {
+            property <color> tint: root.checking ? #7d84a3 : root.pending-total > 0 ? #f5b83d : #2fbf71;
+            height: root.any-connected ? 44px : 0px;
+            opacity: root.any-connected ? 1 : 0;
+            clip: true;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: tint.with-alpha(0.4);
+            background: tint.with-alpha(0.10);
+            animate height, opacity { duration: 300ms; easing: ease-out; }
+            animate background, border-color { duration: 300ms; }
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                spacing: 10px;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 4px;
+                        background: banner.tint;
+                        // Pulse while checking or while files are pending.
+                        opacity: root.checking || root.pending-total > 0 ? 0.55 + 0.45 * Math.sin((animation-tick() / 1ms) * 0.3deg) : 1;
+                    }
+                }
+                Text {
+                    text: root.checking ? "Checking for changed or missing files…"
+                        : root.pending-total > 0 ? root.pending-total + " file(s) new or changed since the last backup"
+                        : "Everything is backed up";
+                    color: banner.tint;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+        }
+
+        go := Rectangle {
+            property <bool> ready: root.any-connected && !root.running && root.sources.length > 0;
+            height: 52px;
+            border-radius: 12px;
+            background: !ready ? #2a2e40 : go-ta.pressed ? #27a862 : go-ta.has-hover ? #3dd683 : #2fbf71;
+            drop-shadow-blur: ready ? 18px : 0px;
+            drop-shadow-color: #2fbf7166;
+            animate background, drop-shadow-blur { duration: 250ms; }
+            Text {
+                text: root.running ? "Backing up…" : !root.any-connected ? "No destination connected" : root.sources.length == 0 ? "Add a source folder" : "Back up now";
+                color: parent.ready ? #0b2416 : #6b7190;
+                font-size: 16px;
+                font-weight: 700;
+            }
+            go-ta := TouchArea {
+                enabled: parent.ready;
+                mouse-cursor: parent.ready ? pointer : default;
+                clicked => { root.backup(); }
+            }
+        }
+
+        Text {
+            text: root.status;
+            color: #7d84a3;
+            font-size: 12px;
+            overflow: elide;
+        }
+    }
+    }
+
+    // About / help window: fades in over the app; closes on ✕, Esc or a click outside.
+    about := Rectangle {
+        y: 52px; // below the title bar so it stays draggable
+        height: parent.height - 52px;
+        background: #05060acc;
+        opacity: root.show-about ? 1 : 0;
+        visible: self.opacity > 0.01;
+        animate opacity { duration: 200ms; easing: ease-out; }
+
+        TouchArea { clicked => { root.show-about = false; } }
+        about-focus := FocusScope {
+            width: 0; // keyboard only: a full-size FocusScope would swallow the click-outside
+            height: 0;
+            key-pressed(e) => {
+                if e.text == Key.Escape { root.show-about = false; return accept; }
+                reject
+            }
+        }
+
+        Card {
+            width: min(parent.width - 48px, 480px);
+            height: min(parent.height - 48px, 560px);
+            y: (parent.height - self.height) / 2 + (root.show-about ? 0px : 16px);
+            animate y { duration: 250ms; easing: ease-out; }
+            drop-shadow-blur: 30px;
+            drop-shadow-color: #00000088;
+            TouchArea { } // swallow clicks so they don't close the window
+
+            VerticalLayout {
+                padding: 24px;
+                spacing: 14px;
+                HorizontalLayout {
+                    spacing: 12px;
+                    Rectangle {
+                        width: 44px;
+                        height: 44px;
+                        border-radius: 10px;
+                        background: #e9edf6;
+                        Image { source: @image-url("logo.png"); width: 36px; height: 36px; image-rendering: smooth; }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 1;
+                        Text { text: "rbackup"; color: #f3f5fb; font-size: 22px; font-weight: 800; }
+                        Text { text: "Version " + root.version; color: #8ea2ff; font-size: 12px; font-weight: 600; }
+                    }
+                    // Close: drawn X (the font has no ✕ glyph).
+                    VerticalLayout {
+                        alignment: start;
+                        x-btn := Rectangle {
+                            width: 34px;
+                            height: 34px;
+                            border-radius: 8px;
+                            background: x-ta.has-hover ? #e5484d : #2d3348;
+                            animate background { duration: 150ms; }
+                            Path {
+                                width: x-ta.has-hover ? 12px : 10px;
+                                height: self.width;
+                                viewbox-width: 10;
+                                viewbox-height: 10;
+                                commands: "M 0 0 L 10 10 M 10 0 L 0 10";
+                                stroke: x-ta.has-hover ? white : #c9cee0;
+                                stroke-width: 1.5px;
+                                animate width { duration: 250ms; easing: ease-out-back; }
+                            }
+                            x-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.show-about = false; }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle { height: 1px; background: #262a3b; }
+
+                Label { text: "HOW TO USE"; }
+                Text {
+                    wrap: word-wrap;
+                    color: #c9cee0;
+                    font-size: 13px;
+                    text: "1.  Source folders — click + Add and choose the folders you want to protect.\n"
+                        + "2.  Destinations — click + Add and choose a folder on an external drive. You can add several.\n"
+                        + "3.  Plug in a drive: its dot turns green and so does the Back up now button.\n"
+                        + "4.  Click Back up now. Only new or changed files are copied, to every connected destination.\n\n"
+                        + "On start-up rbackup checks for changed or missing files and shows the result in the banner.\n\n"
+                        + "Files keep their original path inside the backup, e.g. C:\\Users\\ted\\Documents becomes <destination>\\c\\Users\\ted\\Documents. Files deleted from a source are never deleted from the backup.";
+                }
+
+                Rectangle { height: 1px; background: #262a3b; }
+
+                Label { text: "ABOUT"; }
+                Text {
+                    wrap: word-wrap;
+                    color: #c9cee0;
+                    font-size: 13px;
+                    text: "Designed and developed by Ted Lazaros.\nA lightweight, no-nonsense backup tool written in Rust.";
+                }
+                Text { text: "© 2026 Ted Lazaros"; color: #6b7190; font-size: 12px; }
+                Rectangle { vertical-stretch: 1; }
+            }
+        }
+    }
+
+    // Resize handles (0=N 1=S 2=W 3=E 4=NW 5=NE 6=SW 7=SE).
+    property <length> g: 5px;
+    if !root.maximized: Rectangle {
+        Grip { dir: 0; x: g; y: 0; width: parent.width - 2 * g; height: g; mouse-cursor: ns-resize; resize(d) => { root.resize(d); } }
+        Grip { dir: 1; x: g; y: parent.height - g; width: parent.width - 2 * g; height: g; mouse-cursor: ns-resize; resize(d) => { root.resize(d); } }
+        Grip { dir: 2; x: 0; y: g; width: g; height: parent.height - 2 * g; mouse-cursor: ew-resize; resize(d) => { root.resize(d); } }
+        Grip { dir: 3; x: parent.width - g; y: g; width: g; height: parent.height - 2 * g; mouse-cursor: ew-resize; resize(d) => { root.resize(d); } }
+        Grip { dir: 4; x: 0; y: 0; width: g; height: g; mouse-cursor: nwse-resize; resize(d) => { root.resize(d); } }
+        Grip { dir: 5; x: parent.width - g; y: 0; width: g; height: g; mouse-cursor: nesw-resize; resize(d) => { root.resize(d); } }
+        Grip { dir: 6; x: 0; y: parent.height - g; width: g; height: g; mouse-cursor: nesw-resize; resize(d) => { root.resize(d); } }
+        Grip { dir: 7; x: parent.width - g; y: parent.height - g; width: g; height: g; mouse-cursor: nwse-resize; resize(d) => { root.resize(d); } }
+    }
+}
