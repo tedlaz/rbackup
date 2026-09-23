@@ -2,7 +2,7 @@
 
 slint::include_modules!();
 
-use slint::winit_030::{WinitWindowAccessor, winit};
+use slint::winit_030::{EventResult, WinitWindowAccessor, winit};
 use slint::{Model, SharedString, Timer, TimerMode, VecModel};
 use std::{
     fs,
@@ -317,7 +317,45 @@ fn run_backup(ui: &AppWindow) {
     });
 }
 
+/// Exclusive lock on a file for the app's lifetime; the OS drops it on exit or crash.
+/// Err = another instance holds it. Ok(None) = couldn't create the lock file, run anyway.
+fn instance_lock() -> Result<Option<fs::File>, ()> {
+    let path = config_path().with_file_name("instance.lock");
+    let _ = fs::create_dir_all(path.parent().unwrap());
+    let Ok(file) = fs::OpenOptions::new().create(true).truncate(false).write(true).open(&path) else {
+        return Ok(None);
+    };
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(fs::TryLockError::WouldBlock) => Err(()),
+        Err(_) => Ok(None),
+    }
+}
+
+/// Bring the already running window to the front (restoring it if minimized).
+#[cfg(windows)]
+fn focus_existing() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, SW_RESTORE, SetForegroundWindow, ShowWindow};
+    let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+    // winit's window class + our title, so an Explorer window of a folder named "rbackup" doesn't match.
+    let (class, title) = (wide("Window Class"), wide("rbackup"));
+    unsafe {
+        let hwnd = FindWindowW(class.as_ptr(), title.as_ptr());
+        if hwnd != 0 {
+            ShowWindow(hwnd, SW_RESTORE);
+            SetForegroundWindow(hwnd);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn focus_existing() {}
+
 fn main() -> Result<(), slint::PlatformError> {
+    let Ok(_lock) = instance_lock() else {
+        focus_existing();
+        return Ok(());
+    };
     let ui = AppWindow::new()?;
     let (dests, sources) = load_config();
     let sources = Rc::new(VecModel::from(sources));
@@ -419,6 +457,20 @@ fn main() -> Result<(), slint::PlatformError> {
     });
     ui.on_close_window(|| {
         let _ = slint::quit_event_loop();
+    });
+
+    // Re-check when the user comes back to the window, e.g. after deleting or editing files in Explorer.
+    ui.window().on_winit_window_event({
+        let weak = ui.as_weak();
+        move |_, event| {
+            if let winit::event::WindowEvent::Focused(true) = event
+                && let Some(ui) = weak.upgrade()
+                && !ui.get_checking()
+            {
+                check(&ui);
+            }
+            EventResult::Propagate
+        }
     });
 
     // Poll drives; re-check for changes when one gets plugged in.

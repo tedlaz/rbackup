@@ -28,7 +28,7 @@ Settings are saved in `%APPDATA%\rbackup\config.txt`.
 
 ## Building
 
-Requires Rust 1.88 or newer (edition 2024) and the MSVC toolchain on Windows.
+Requires Rust 1.89 or newer (edition 2024) and the MSVC toolchain on Windows.
 
 ```
 cargo run --release     # build and run
@@ -49,7 +49,7 @@ The app icon is `ui/icon.ico`, and `build.rs` embeds it in the `.exe`. The title
    git tag v0.1.0
    git push origin v0.1.0
    ```
-3. GitHub Actions runs the tests, builds the release version on Windows, and creates a GitHub release with `rbackup-v0.1.0-windows-x64.exe` attached.
+3. GitHub Actions runs the tests, builds the release version on Windows, and creates a GitHub release with `rbackup.zip` (containing `rbackup.exe`) attached. The name is the same for every release, so `https://github.com/<owner>/<repo>/releases/latest/download/rbackup.zip` always downloads the newest version.
 
 ## Project layout
 

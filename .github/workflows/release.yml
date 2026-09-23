@@ -23,11 +23,13 @@ jobs:
       - name: Build
         run: cargo build --release --locked
 
+      # Same asset name every release: rbackup.zip containing rbackup.exe,
+      # so https://github.com/<owner>/<repo>/releases/latest/download/rbackup.zip always works.
+      - name: Package
+        shell: pwsh
+        run: Compress-Archive -Path target/release/rbackup.exe -DestinationPath rbackup.zip
+
       - name: Publish release
-        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          asset="rbackup-${GITHUB_REF_NAME}-windows-x64.exe"
-          cp target/release/rbackup.exe "$asset"
-          gh release create "$GITHUB_REF_NAME" "$asset" --title "rbackup $GITHUB_REF_NAME" --generate-notes
+        run: gh release create "${{ github.ref_name }}" rbackup.zip --title "rbackup ${{ github.ref_name }}" --generate-notes

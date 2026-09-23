@@ -3362,11 +3362,12 @@ dependencies = [
 
 [[package]]
 name = "rbackup"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "rfd",
  "slint",
  "slint-build",
+ "windows-sys 0.52.0",
  "winresource",
 ]
 

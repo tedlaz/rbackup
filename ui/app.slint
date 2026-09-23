@@ -382,7 +382,7 @@ export component AppWindow inherits Window {
                 }
                 Text {
                     text: root.checking ? "Checking for changed or missing files…"
-                        : root.pending-total > 0 ? root.pending-total + " file(s) new or changed since the last backup"
+                        : root.pending-total > 0 ? root.pending-total + " file(s) new, changed or missing from the backup"
                         : "Everything is backed up";
                     color: banner.tint;
                     font-weight: 600;
